@@ -1,4 +1,5 @@
 // MountController.kt
+
 package matthewdaluz.simpleboot.util
 
 import android.content.Context
@@ -10,6 +11,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+// Enum representing supported mount methods
 enum class MountMethod {
     CONFIGFS,
     LEGACY,
@@ -18,43 +20,48 @@ enum class MountMethod {
 
 object MountController {
 
+    // Common paths for ConfigFS gadget configurations
     private val CONFIGFS_PATHS = arrayOf(
         "/config/usb_gadget/g1",
         "/sys/kernel/config/usb_gadget/g1",
         "/sys/usb_gadget/g1"
     )
+
+    // Constant paths and identifiers
     private const val UDC_PATH = "/sys/class/udc"
     private const val MASS_STORAGE_FUNC = "mass_storage.0"
     private const val LEGACY_USB_PATH = "/sys/class/android_usb/android0"
     private const val LEGACY_MASS_STORAGE_PATH = "$LEGACY_USB_PATH/f_mass_storage/lun/file"
     private const val LOOPBACK_DEVICE = "/dev/block/loop7"
 
+    // Log helper for file-based debugging
     private fun logToFile(context: Context, message: String) {
         val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault()).format(Date())
         val logMessage = "[$timestamp] $message\n"
         LogManager.logToFile(context, logMessage)
     }
 
+    /**
+     * Main entry to mount an ISO using the specified method.
+     */
     fun mount(context: Context, isoPath: String, method: MountMethod, lun: Int = 0): MountResult {
         logToFile(context, "MountController.mount() called with path: $isoPath, method: $method")
 
+        // Check file existence
         if (!File(isoPath).exists()) {
             logToFile(context, "Mount failed: File does not exist at $isoPath")
             return MountResult(false, "File does not exist.")
         }
 
+        // Prevent duplicate mounting
         val existing = MountStateStore.load(context)
         if (existing != null && existing.filePath == isoPath) {
             logToFile(context, "Mount failed: Image already mounted (${existing.loopDevice})")
             return MountResult(false, "Image is already mounted.")
         }
 
-        // Disable Android USB stack and ADB
-        Shell.cmd(
-            "setprop sys.usb.config none",
-            "setprop sys.usb.state none"
-        ).exec()
-
+        // Disable Android's USB stack and ADB to prepare for gadget configuration
+        Shell.cmd("setprop sys.usb.config none", "setprop sys.usb.state none").exec()
         logToFile(context, "USB stack and ADB disabled for clean mount")
 
         return when (method) {
@@ -64,6 +71,9 @@ object MountController {
         }
     }
 
+    /**
+     * Unmounts the currently mounted ISO and resets the USB configuration.
+     */
     fun unmount(context: Context): MountResult {
         logToFile(context, "MountController.unmount() called")
 
@@ -72,6 +82,7 @@ object MountController {
 
         logToFile(context, "Unmounting ${mount.filePath} from ${mount.loopDevice}")
 
+        // Cleanup commands for both configfs and legacy paths
         val cleanupCmds = mutableListOf<String>().apply {
             CONFIGFS_PATHS.forEach { path ->
                 add("echo '' > $path/UDC || true")
@@ -95,25 +106,26 @@ object MountController {
         }
     }
 
-    private fun mountUsingConfigFs(
-        context: Context,
-        isoPath: String,
-        lun: Int
-    ): MountResult {
-        val loopDevice = getAvailableLoopDevice(context)
+    /**
+     * Mount via ConfigFS USB Gadget API.
+     */
+    private fun mountUsingConfigFs(context: Context, isoPath: String, lun: Int): MountResult {
+        val loopDevice = getAvailableLoopDevice()
             ?: return MountResult(false, "No available loop device found.")
 
-        val configFsPath = findConfigFsPath(context)
+        val configFsPath = findConfigFsPath()
             ?: return MountResult(false, "ConfigFS not found")
 
         val lunFile = "$configFsPath/functions/$MASS_STORAGE_FUNC/lun.$lun/file"
-        val udc = getUdcName(context) ?: return MountResult(false, "No UDC controller found")
+        val udc = getUdcName() ?: return MountResult(false, "No UDC controller found")
 
-        ensureModulesLoaded(context)
+        ensureModulesLoaded()
 
+        // Determine read-only setting from preferences
         val readOnly = if (PreferenceManager.getDefaultSharedPreferences(context)
                 .getBoolean("mount_read_only", false)) 1 else 0
 
+        // Shell commands to create and activate gadget
         val cmds = mutableListOf(
             "echo '' > $configFsPath/UDC",
             "losetup -d $loopDevice || true",
@@ -126,8 +138,8 @@ object MountController {
             "echo $readOnly > $configFsPath/functions/$MASS_STORAGE_FUNC/ro",
             "echo \"$loopDevice\" > $lunFile",
             "ln -s $configFsPath/functions/$MASS_STORAGE_FUNC $configFsPath/configs/c.1/",
-            "echo 0x05ac > $configFsPath/idVendor",
-            "echo 0x8290 > $configFsPath/idProduct",
+            "echo 0x05ac > $configFsPath/idVendor",   // Apple vendor ID for compatibility
+            "echo 0x8290 > $configFsPath/idProduct", // Custom product ID
             "echo $udc > $configFsPath/UDC",
             "setprop sys.usb.config mass_storage,adb",
             "setprop sys.usb.state mass_storage,adb"
@@ -139,20 +151,19 @@ object MountController {
             LogManager.logMount(context, File(isoPath).name, "$loopDevice via configfs")
             MountResult(true, "Mounted successfully using configfs.", loopDevice)
         } else {
-            cleanupMount(context, loopDevice)
+            cleanupMount(loopDevice)
             MountResult(false, result.err.joinToString("\n"))
         }
     }
 
-    private fun mountUsingLegacy(
-        context: Context,
-        isoPath: String,
-        lun: Int
-    ): MountResult {
-        val loopDevice = getAvailableLoopDevice(context)
+    /**
+     * Mount using legacy USB interface (older Android method).
+     */
+    private fun mountUsingLegacy(context: Context, isoPath: String, lun: Int): MountResult {
+        val loopDevice = getAvailableLoopDevice()
             ?: return MountResult(false, "No available loop device found.")
 
-        ensureModulesLoaded(context)
+        ensureModulesLoaded()
         val readOnly = if (PreferenceManager.getDefaultSharedPreferences(context)
                 .getBoolean("mount_read_only", false)) 1 else 0
 
@@ -175,15 +186,15 @@ object MountController {
             LogManager.logMount(context, File(isoPath).name, "$loopDevice via legacy")
             MountResult(true, "Mounted successfully using legacy method.", loopDevice)
         } else {
-            cleanupMount(context, loopDevice)
+            cleanupMount(loopDevice)
             MountResult(false, result.err.joinToString("\n"))
         }
     }
 
-    private fun mountUsingLoopback(
-        context: Context,
-        isoPath: String
-    ): MountResult {
+    /**
+     * Mount ISO using loopback only (no USB gadget exposure).
+     */
+    private fun mountUsingLoopback(context: Context, isoPath: String): MountResult {
         val readOnly = if (PreferenceManager.getDefaultSharedPreferences(context)
                 .getBoolean("mount_read_only", false)) 1 else 0
 
@@ -199,12 +210,15 @@ object MountController {
             LogManager.logMount(context, File(isoPath).name, "$LOOPBACK_DEVICE via loopback")
             MountResult(true, "Mounted successfully using loopback method.", LOOPBACK_DEVICE)
         } else {
-            cleanupMount(context, LOOPBACK_DEVICE)
+            cleanupMount(LOOPBACK_DEVICE)
             MountResult(false, result.err.joinToString("\n"))
         }
     }
 
-    private fun cleanupMount(context: Context, loopDevice: String?) {
+    /**
+     * Generic cleanup for mounts across all supported methods.
+     */
+    private fun cleanupMount(loopDevice: String?) {
         val cmds = mutableListOf<String>().apply {
             CONFIGFS_PATHS.forEach { path ->
                 add("echo '' > $path/UDC || true")
@@ -219,21 +233,25 @@ object MountController {
         Shell.cmd(*cmds.toTypedArray()).exec()
     }
 
-    private fun getAvailableLoopDevice(context: Context): String? {
+    // Finds the first available loop device
+    private fun getAvailableLoopDevice(): String? {
         val losetup = Shell.cmd("losetup -f").exec()
         return losetup.out.firstOrNull()?.trim()
     }
 
-    private fun findConfigFsPath(context: Context): String? {
+    // Finds a working configfs gadget path
+    private fun findConfigFsPath(): String? {
         return CONFIGFS_PATHS.firstOrNull { File(it).exists() }
     }
 
-    private fun getUdcName(context: Context): String? {
+    // Gets the current USB Device Controller (UDC) name
+    private fun getUdcName(): String? {
         val files = File(UDC_PATH).listFiles() ?: return null
         return files.firstOrNull()?.name
     }
 
-    private fun ensureModulesLoaded(context: Context) {
+    // Loads required USB gadget kernel modules
+    private fun ensureModulesLoaded() {
         val modules = listOf("libcomposite", "usb_f_mass_storage", "g_mass_storage")
         modules.forEach { Shell.cmd("modprobe $it || true").exec() }
     }
