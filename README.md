@@ -13,7 +13,7 @@
   - `ConfigFS`: For most modern kernels
   - `Legacy`: For older Android USB stacks
   - `Loopback`: For direct mount w/o USB gadget (testing or chaining)
-- 💿 **CD-ROM boot mode** with forced descriptors for BIOS/UEFI compatibility
+- 💿 **CD-ROM boot mode** with forced descriptors for BIOS/UEFI compatibility (Deprecated. To be removed in later builds.)
 - 🔐 **Root shell integration** using [`libsu`](https://github.com/topjohnwu/libsu)
 - 🧠 **Complete logging** of all mount/unmount operations (`SimpleBootLogs`)
 - 🌓 **Light/Dark mode** Jetpack Compose UI
@@ -25,12 +25,11 @@
 ---
 
 ## 📸 Screenshots
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/634f891b-070c-4e3d-91df-4f1a5e415ddb" alt="Screenshot 1" width="200"/>
-  <img src="https://github.com/user-attachments/assets/b642453f-8535-4842-8cad-1f186a0ddd4b" alt="Screenshot 2" width="200"/>
-</p>
 
----
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/81af67c3-1c10-40dc-bf7e-81a62158c33a" alt="Screenshot 1" width="200"/>
+  <img src="https://github.com/user-attachments/assets/81af67c3-1c10-40dc-bf7e-81a62158c33a" alt="Screenshot 2" width="200"/>
+</p>
 
 ## ⚙️ Requirements
 
