@@ -1,104 +1,140 @@
-// LogManager.kt
-
 package matthewdaluz.simpleboot.util
 
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Environment
 import androidx.core.content.FileProvider
 import java.io.File
+import java.io.IOException
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
 /**
- * LogManager is responsible for logging all mount/unmount actions and general messages,
- * saving them into daily log files, and optionally exporting them for sharing.
+ * Centralized logger for SimpleBoot.
+ * Writes detailed logs to /storage/emulated/0/SimpleBootLogs and handles export.
+ * Now includes self-diagnostics and graceful error handling.
  */
 object LogManager {
 
-    // Date format used in log entries
-    private const val DATE_PATTERN = "yyyy-MM-dd HH:mm"
-    // Date format used in log file names
+    private const val DATE_PATTERN = "yyyy-MM-dd HH:mm:ss"
     private const val FILE_DATE_PATTERN = "yyyyMMdd"
     private val formatter = DateTimeFormatter.ofPattern(DATE_PATTERN)
+    private val LOG_DIR = File(Environment.getExternalStorageDirectory(), "SimpleBootLogs")
 
-    /**
-     * Logs a mount event with timestamp and device details.
-     *
-     * @param context    Application context
-     * @param fileName   Name of the mounted file
-     * @param loopDevice Associated loop device
-     */
-    fun logMount(context: Context, fileName: String, loopDevice: String) {
+    init {
+        ensureLogDir()
+    }
+
+    // -------------------------------------------------------------------------
+    // Utility helpers
+    // -------------------------------------------------------------------------
+
+    private fun ensureLogDir(): Boolean {
+        return try {
+            if (!LOG_DIR.exists()) {
+                val success = LOG_DIR.mkdirs()
+                if (!success) {
+                    System.err.println("[LogManager] Failed to create log directory: ${LOG_DIR.absolutePath}")
+                } else {
+                    println("[LogManager] Created log directory: ${LOG_DIR.absolutePath}")
+                }
+                success
+            } else true
+        } catch (e: Exception) {
+            System.err.println("[LogManager] Exception while creating log directory: ${e.message}")
+            false
+        }
+    }
+
+    private fun getLogFile(): File? {
+        return try {
+            val date = LocalDateTime.now().format(DateTimeFormatter.ofPattern(FILE_DATE_PATTERN))
+            val logFile = File(LOG_DIR, "mount_log_$date.txt")
+            if (!logFile.exists()) logFile.createNewFile()
+            logFile
+        } catch (e: IOException) {
+            System.err.println("[LogManager] Failed to access log file: ${e.message}")
+            null
+        }
+    }
+
+    private fun safeWrite(file: File?, text: String) {
+        if (file == null) return
+        try {
+            file.appendText(text)
+        } catch (e: IOException) {
+            System.err.println("[LogManager] Write error: ${e.message}")
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Public logging functions
+    // -------------------------------------------------------------------------
+
+    @Suppress("UNUSED_PARAMETER")
+    fun logMount(context: Context?, fileName: String, loopDevice: String) {
         val timestamp = LocalDateTime.now().format(formatter)
-        val log = "[$timestamp] Mounted: $fileName to $loopDevice\n"
-        writeLog(context, log)
+        val entry = "[$timestamp] [Mount] Mounted: $fileName to $loopDevice\n"
+        logInternal(entry)
     }
 
-    /**
-     * Logs an unmount event with timestamp and device details.
-     *
-     * @param context    Application context
-     * @param fileName   Name of the unmounted file
-     * @param loopDevice Associated loop device
-     */
-    fun logUnmount(context: Context, fileName: String, loopDevice: String) {
+    @Suppress("UNUSED_PARAMETER")
+    fun logUnmount(context: Context?, fileName: String, loopDevice: String) {
         val timestamp = LocalDateTime.now().format(formatter)
-        val log = "[$timestamp] Unmounted: $fileName from $loopDevice\n"
-        writeLog(context, log)
+        val entry = "[$timestamp] [Unmount] Unmounted: $fileName from $loopDevice\n"
+        logInternal(entry)
     }
 
-    /**
-     * Generic log message writer, prepending the current timestamp.
-     *
-     * @param context Application context
-     * @param message Message to log
-     */
-    fun logToFile(context: Context, message: String) {
+    @Suppress("UNUSED_PARAMETER")
+    fun logToFile(context: Context?, message: String) {
         val timestamp = LocalDateTime.now().format(formatter)
-        val log = "[$timestamp] $message\n"
-        writeLog(context, log)
+        val entry = "[$timestamp] $message\n"
+        logInternal(entry)
     }
 
-    /**
-     * Writes a log entry into a log file named by the current date.
-     *
-     * @param context Application context
-     * @param entry   Full log entry to append
-     */
-    private fun writeLog(context: Context, entry: String) {
-        // Create log directory inside app-specific external storage
-        val logDir = File(context.getExternalFilesDir(null), "SimpleBootLogs")
-        if (!logDir.exists()) logDir.mkdirs()
+    private fun logInternal(entry: String) {
+        // Self-checks before writing
+        if (!Environment.getExternalStorageState().equals(Environment.MEDIA_MOUNTED)) {
+            System.err.println("[LogManager] Skipping write — external storage not mounted.")
+            return
+        }
 
-        // Create a log file with the current date in the name
-        val date = LocalDateTime.now().format(DateTimeFormatter.ofPattern(FILE_DATE_PATTERN))
-        val logFile = File(logDir, "mount_log_$date.txt")
+        if (!ensureLogDir()) {
+            System.err.println("[LogManager] Skipping write — could not ensure log directory.")
+            return
+        }
 
-        // Append the entry to the log file
-        logFile.appendText(entry)
+        val file = getLogFile()
+        if (file == null) {
+            System.err.println("[LogManager] Skipping write — log file unavailable.")
+            return
+        }
+
+        safeWrite(file, entry)
     }
 
-    /**
-     * Exports the current day's log file as an Intent to share it via apps.
-     *
-     * @param context Application context
-     * @return        Share Intent or null if no file exists
-     */
+    // -------------------------------------------------------------------------
+    // Export function
+    // -------------------------------------------------------------------------
+
     fun exportLogFile(context: Context): Intent? {
-        val logDir = File(context.getExternalFilesDir(null), "SimpleBootLogs")
         val date = LocalDateTime.now().format(DateTimeFormatter.ofPattern(FILE_DATE_PATTERN))
-        val file = File(logDir, "mount_log_$date.txt")
-        if (!file.exists()) return null
+        val file = File(LOG_DIR, "mount_log_$date.txt")
 
-        // Create a content URI using FileProvider
+        if (!file.exists()) {
+            logToFile(context, "[LogManager] Export aborted — no log file available for today.")
+            return null
+        }
+
         val uri: Uri = FileProvider.getUriForFile(
             context,
             context.packageName + ".provider",
             file
         )
 
-        // Create a send intent to share the log file
+        logToFile(context, "[LogManager] Exporting log file: ${file.absolutePath}")
+
         return Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_STREAM, uri)

@@ -1,8 +1,5 @@
-// MainActivity.kt
-
 package matthewdaluz.simpleboot
 
-// Import necessary Android and Compose libraries
 import android.content.Intent
 import android.os.Bundle
 import android.os.Environment
@@ -27,26 +24,25 @@ import com.topjohnwu.superuser.Shell
 import kotlinx.coroutines.launch
 import matthewdaluz.simpleboot.model.IsoFile
 import matthewdaluz.simpleboot.ui.theme.SimpleBootTheme
-import matthewdaluz.simpleboot.util.LogManager
-import matthewdaluz.simpleboot.util.MountController
-import matthewdaluz.simpleboot.util.MountMethod
-import matthewdaluz.simpleboot.util.MountStateStore
-import matthewdaluz.simpleboot.util.StorageManager
+import matthewdaluz.simpleboot.util.*
 import androidx.core.net.toUri
+import androidx.compose.material3.MenuAnchorType
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Check for root access - essential for SimpleBoot's functionality
+        LogManager.logToFile(this, "MainActivity.onCreate() - App launched")
+
         if (!Shell.getShell().isRoot) {
             Toast.makeText(this, "Root access is required!", Toast.LENGTH_LONG).show()
-            finish() // Close the app if root isn't available
+            LogManager.logToFile(this, "Root access missing - closing app")
+            finish()
         }
 
-        // Set up Compose UI with theme that adapts to system dark mode
         setContent {
             SimpleBootTheme(darkTheme = isSystemInDarkTheme()) {
+                LogManager.logToFile(this, "Compose UI started")
                 AppScreen()
             }
         }
@@ -56,132 +52,117 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppScreen() {
-    // Context and coroutine scope for background operations
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    // State variables for the UI
-    var isoList by remember { mutableStateOf<List<IsoFile>>(emptyList()) } // List of ISO files
-    var currentMount by remember { mutableStateOf<MountStateStore.MountInfo?>(null) } // Currently mounted ISO
-    val snackbarHostState = remember { SnackbarHostState() } // For showing snackbar messages
-    var statusText by remember { mutableStateOf("Status: Idle") } // Status display text
-    var showMountMenu by remember { mutableStateOf(false) } // Controls mount options dialog visibility
-    var selectedIso by remember { mutableStateOf<IsoFile?>(null) } // Currently selected ISO for mounting
-    var adbEnabled by remember { mutableStateOf(true) } // ADB toggle state
-    var usbChargingEnabled by remember { mutableStateOf(true) } // USB charging toggle state
+    var isoList by remember { mutableStateOf<List<IsoFile>>(emptyList()) }
+    var currentMount by remember { mutableStateOf<MountStateStore.MountInfo?>(null) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    var statusText by remember { mutableStateOf("Status: Idle") }
+    var showMountMenu by remember { mutableStateOf(false) }
+    var selectedIso by remember { mutableStateOf<IsoFile?>(null) }
+    var adbEnabled by remember { mutableStateOf(true) }
+    var usbChargingEnabled by remember { mutableStateOf(true) }
+    var selectedMethod by remember { mutableStateOf(MountMethod.CONFIGFS) }
+    var selectedUsbMode by remember { mutableStateOf(UsbMode.USB_HDD) }
 
-    // Effect that runs once when the screen is first displayed
     LaunchedEffect(Unit) {
-        // Check for file system access permissions
+        LogManager.logToFile(context, "AppScreen launched - checking storage access")
+
         if (!Environment.isExternalStorageManager()) {
-            // Request all files access permission if not granted
+            LogManager.logToFile(context, "External storage permission missing - launching settings")
             val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
                 data = "package:${context.packageName}".toUri()
             }
             context.startActivity(intent)
         } else {
-            // If permissions are granted, set up directories and load data
+            LogManager.logToFile(context, "External storage permission granted - loading ISOs")
             StorageManager.ensureDirectories()
             isoList = StorageManager.getIsoFileList()
+            LogManager.logToFile(context, "Loaded ${isoList.size} ISO/IMG files")
             currentMount = MountStateStore.load(context)
+            LogManager.logToFile(context, "Current mount: ${currentMount?.filePath ?: "None"}")
         }
     }
 
-    /**
-     * Toggles ADB (Android Debug Bridge) functionality
-     * @param enabled Whether to enable or disable ADB
-     */
     fun toggleAdb(enabled: Boolean) {
         coroutineScope.launch {
-            // Execute shell command to toggle ADB
+            LogManager.logToFile(context, "toggleAdb($enabled) called")
             val result = Shell.cmd(
-                if (enabled) {
-                    "setprop sys.usb.config mass_storage,adb"
-                } else {
-                    "setprop sys.usb.config mass_storage"
-                }
+                if (enabled) "setprop sys.usb.config mass_storage,adb"
+                else "setprop sys.usb.config mass_storage"
             ).exec()
-
             if (result.isSuccess) {
                 adbEnabled = enabled
                 snackbarHostState.showSnackbar("ADB ${if (enabled) "enabled" else "disabled"}")
+                LogManager.logToFile(context, "ADB toggled successfully -> $enabled")
             } else {
                 snackbarHostState.showSnackbar("Failed to toggle ADB")
+                LogManager.logToFile(context, "Failed to toggle ADB")
             }
         }
     }
 
-    /**
-     * Toggles USB charging functionality
-     * @param enabled Whether to enable or disable USB charging
-     */
     fun toggleUsbCharging(enabled: Boolean) {
         coroutineScope.launch {
-            // Execute shell command to toggle USB charging
-            val result = Shell.cmd(
-                if (enabled) {
-                    "echo 1 > /sys/class/power_supply/usb/device/charge"
-                } else {
-                    "echo 0 > /sys/class/power_supply/usb/device/charge"
-                }
-            ).exec()
-
-            if (result.isSuccess) {
+            LogManager.logToFile(context, "toggleUsbCharging($enabled) called")
+            val ok = UsbChargingController.setCharging(enabled)
+            if (ok) {
                 usbChargingEnabled = enabled
                 snackbarHostState.showSnackbar("USB charging ${if (enabled) "enabled" else "disabled"}")
+                LogManager.logToFile(context, "USB charging toggled successfully -> $enabled")
             } else {
-                snackbarHostState.showSnackbar("Failed to toggle USB charging")
+                snackbarHostState.showSnackbar("Failed to toggle charging on this device")
+                LogManager.logToFile(context, "Failed to toggle USB charging")
             }
         }
     }
 
-    /**
-     * Handles mounting/unmounting of ISO files
-     * @param iso The ISO file to mount/unmount
-     * @param method The mounting method to use
-     */
-    fun handleMount(iso: IsoFile, method: MountMethod) {
+    fun handleMount(iso: IsoFile, method: MountMethod, mode: UsbMode) {
         coroutineScope.launch {
-            val isMounted = currentMount?.filePath == iso.path
+            LogManager.logToFile(context, "handleMount() - ISO=${iso.name}, method=$method, mode=$mode")
 
-            // If already mounted, unmount it
+            val isMounted = currentMount?.filePath == iso.path
             if (isMounted) {
+                LogManager.logToFile(context, "Unmounting existing ISO: ${iso.name}")
                 val result = MountController.unmount(context)
                 if (result.success) {
                     currentMount = null
                     statusText = "Unmounted: ${iso.name}"
                     snackbarHostState.showSnackbar(statusText)
-                    isoList = StorageManager.getIsoFileList() // Refresh list
+                    isoList = StorageManager.getIsoFileList()
+                    LogManager.logToFile(context, "Successfully unmounted ${iso.name}")
                 } else {
                     val message = result.message.ifBlank { "Unknown error occurred." }
                     snackbarHostState.showSnackbar("Failed to unmount: $message")
+                    LogManager.logToFile(context, "Unmount failed for ${iso.name}: $message")
                 }
                 return@launch
             }
 
-            // Check if another ISO is already mounted
             if (currentMount != null) {
                 snackbarHostState.showSnackbar("Another ISO is already mounted.")
+                LogManager.logToFile(context, "Mount blocked - another ISO already mounted.")
                 return@launch
             }
 
-            // Mount the selected ISO
-            val result = MountController.mount(context, iso.path, method)
+            val result = MountController.mount(context, iso.path, method, mode)
             if (result.success) {
                 currentMount = MountStateStore.load(context)
-                statusText = "Mounted (${method.name}): ${iso.name}"
+                statusText = "Mounted (${method.name}, ${mode.name}): ${iso.name}"
                 snackbarHostState.showSnackbar(statusText)
-                isoList = StorageManager.getIsoFileList() // Refresh list
+                isoList = StorageManager.getIsoFileList()
+                LogManager.logToFile(context, "Mount successful -> ${iso.name} (${method.name}/${mode.name})")
             } else {
                 val message = result.message.ifBlank { "Unknown error occurred." }
                 snackbarHostState.showSnackbar("Failed to mount: $message")
+                LogManager.logToFile(context, "Mount failed for ${iso.name}: $message")
             }
         }
     }
 
-    // Main UI layout using Material3 Scaffold
     Scaffold(
-        topBar = { TopAppBar(title = { Text("SimpleBoot - v1.0b") }) },
+        topBar = { TopAppBar(title = { Text("SimpleBoot - v2.0") }) },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         Column(
@@ -190,13 +171,11 @@ fun AppScreen() {
                 .fillMaxSize()
                 .padding(16.dp)
         ) {
-            // Top row with toggle buttons and export log button
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row {
-                    // ADB toggle button
                     IconToggleButton(
                         checked = adbEnabled,
                         onCheckedChange = { toggleAdb(it) },
@@ -210,7 +189,6 @@ fun AppScreen() {
                         )
                     }
 
-                    // USB charging toggle button
                     IconToggleButton(
                         checked = usbChargingEnabled,
                         onCheckedChange = { toggleUsbCharging(it) }
@@ -222,51 +200,95 @@ fun AppScreen() {
                             else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                         )
                     }
-
-                    // Duplicate USB charging toggle button (This is a bug I think.)
-                    IconToggleButton(
-                        checked = usbChargingEnabled,
-                        onCheckedChange = { toggleUsbCharging(it) }
-                    ) {
-                        Icon(
-                            Icons.Default.Usb,
-                            contentDescription = "Toggle USB Charging",
-                            tint = if (usbChargingEnabled) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                        )
-                    }
                 }
 
-                // Button to export logs
                 Button(
                     onClick = {
+                        LogManager.logToFile(context, "Export log button clicked")
                         val intent = LogManager.exportLogFile(context)
                         if (intent != null) {
                             context.startActivity(Intent.createChooser(intent, "Share SimpleBoot Log"))
+                            LogManager.logToFile(context, "Log export intent launched")
                         } else {
                             Toast.makeText(context, "No log file available", Toast.LENGTH_SHORT).show()
+                            LogManager.logToFile(context, "No log file available to export")
                         }
                     }
-                ) {
-                    Text("Export Log")
-                }
+                ) { Text("Export Log") }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Status text display
-            Text(
-                text = statusText,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                var methodExpanded by remember { mutableStateOf(false) }
+                ExposedDropdownMenuBox(
+                    expanded = methodExpanded,
+                    onExpandedChange = { methodExpanded = !methodExpanded }
+                ) {
+                    OutlinedTextField(
+                        value = selectedMethod.name,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Mount Method") },
+                        modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true).weight(1f)
+                    )
+                    ExposedDropdownMenu(
+                        expanded = methodExpanded,
+                        onDismissRequest = { methodExpanded = false }
+                    ) {
+                        MountMethod.entries.forEach { m: MountMethod ->
+                            DropdownMenuItem(
+                                text = { Text(m.name) },
+                                onClick = {
+                                    selectedMethod = m
+                                    methodExpanded = false
+                                    LogManager.logToFile(context, "Mount method selected: $m")
+                                }
+                            )
+                        }
+                    }
+                }
 
-            // List of ISO files
+                var usbExpanded by remember { mutableStateOf(false) }
+                ExposedDropdownMenuBox(
+                    expanded = usbExpanded,
+                    onExpandedChange = { usbExpanded = !usbExpanded }
+                ) {
+                    OutlinedTextField(
+                        value = selectedUsbMode.name,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("USB Method") },
+                        modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true).weight(1f)
+                    )
+                    ExposedDropdownMenu(
+                        expanded = usbExpanded,
+                        onDismissRequest = { usbExpanded = false }
+                    ) {
+                        UsbMode.entries.forEach { um: UsbMode ->
+                            DropdownMenuItem(
+                                text = { Text(um.name) },
+                                onClick = {
+                                    selectedUsbMode = um
+                                    usbExpanded = false
+                                    LogManager.logToFile(context, "USB mode selected: $um")
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(text = statusText, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp))
+
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 items(isoList) { iso ->
                     val isMounted = currentMount?.filePath == iso.path
-
-                    // Card for each ISO file
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -278,6 +300,7 @@ fun AppScreen() {
                                 .clickable {
                                     selectedIso = iso
                                     showMountMenu = true
+                                    LogManager.logToFile(context, "ISO clicked: ${iso.name}")
                                 }
                         ) {
                             Text(text = iso.name, style = MaterialTheme.typography.titleMedium)
@@ -290,7 +313,6 @@ fun AppScreen() {
                     }
                 }
 
-                // Show message if no ISOs are found
                 if (isoList.isEmpty()) {
                     item {
                         Text(
@@ -298,39 +320,36 @@ fun AppScreen() {
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.padding(16.dp)
                         )
+                        LogManager.logToFile(context, "No ISO/IMG files found on device")
                     }
                 }
             }
         }
     }
 
-    // Mount options dialog
     if (showMountMenu && selectedIso != null) {
         AlertDialog(
             onDismissRequest = { showMountMenu = false },
             title = { Text("Mount Options") },
             text = {
-                Column {
-                    Text("Select mount method for ${selectedIso?.name}")
-                    Spacer(modifier = Modifier.height(16.dp))
-                    // Show a button for each mount method
-                    MountMethod.entries.forEach { method ->
-                        Button(
-                            onClick = {
-                                handleMount(selectedIso!!, method)
-                                showMountMenu = false
-                            },
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                        ) {
-                            Text(method.name)
-                        }
-                    }
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("File: ${selectedIso?.name}")
+                    Text("Method: ${selectedMethod.name}")
+                    Text("USB Method: ${selectedUsbMode.name}")
                 }
             },
             confirmButton = {
-                Button(onClick = { showMountMenu = false }) {
-                    Text("Cancel")
-                }
+                Button(onClick = {
+                    LogManager.logToFile(context, "Mount confirmed for ${selectedIso?.name}")
+                    handleMount(selectedIso!!, selectedMethod, selectedUsbMode)
+                    showMountMenu = false
+                }) { Text("Mount") }
+            },
+            dismissButton = {
+                Button(onClick = {
+                    LogManager.logToFile(context, "Mount dialog cancelled")
+                    showMountMenu = false
+                }) { Text("Cancel") }
             }
         )
     }
