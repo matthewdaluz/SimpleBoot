@@ -1,3 +1,5 @@
+## SimpleBoot will soon be a product of RedHead Industries, a non-profit organization that I have founded -- By the people, for the people. This does not mean SimpleBoot will go proprietary, this is simply a change of ownership (and where SimpleBoot's repository will be at).
+
 # 📱 SimpleBoot
 
 **SimpleBoot** is a powerful, root-required Android app that transforms your phone into a fully bootable USB device. Mount ISO/IMG files via **ConfigFS**, **Legacy mass_storage**, or raw **Loopback** mode and boot directly into live systems on any PC.
