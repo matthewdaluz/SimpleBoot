@@ -1,4 +1,5 @@
-## SimpleBoot will soon be a product of RedHead Industries, a non-profit organization that I have founded -- By the people, for the people. This does not mean SimpleBoot will go proprietary, this is simply a change of ownership (and where SimpleBoot's repository will be at).
+## SimpleBoot is now a product of RedHead Industries, a non-profit organization that I have founded -- By the people, for the people. This does not mean SimpleBoot is now proprietary, this is simply a change of ownership (and where SimpleBoot's repository will be at).
+## Check the new repository here: https://github.com/redhead-industries/SimpleBoot
 
 # 📱 SimpleBoot
 
